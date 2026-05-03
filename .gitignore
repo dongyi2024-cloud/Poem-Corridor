@@ -1,0 +1,10 @@
+# 忽略 Claude 配置
+.claude/
+# 忽略 VS Code 配置
+.vscode/
+# 忽略 Blender 备份和源文件
+*.blend
+*.blend1
+# 忽略环境配置和日志
+.env
+*.log
