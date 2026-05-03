@@ -20,9 +20,9 @@ let isPaused = false;
 // ==================== CONFIG ====================
 export const CONFIG = {
     loop: {
-        radius: 10.0,       // 稍微增大半径，确保中心空洞感
+        radius: 8.0,       // 环形半径
         height: 1.5,
-        stepAngle: 0.1,
+        stepAngle: 0.375,  // 每步3米 (3/8)
         moveDuration: 1.2,
         moveEase: 'power2.inOut',
         lookAheadOffset: 0.15
@@ -31,7 +31,7 @@ export const CONFIG = {
     camera: { fov: 60, near: 0.1, far: 1000 },
     overview: { altitude: 20, distance: 28, duration: 45, floatAmp: 1.5 },
     transition: { duration: 3.5, ease: 'power2.inOut' },
-    numPoints: 160,
+    numPoints: 130,  // 130个矩形框
     frameThickness: 0.05,
     framePoleThickness: 0.06,
     zAmplitude: 1.2
@@ -104,19 +104,29 @@ function buildPoemLoop(originalData, isDefault = false) {
     const n = originalData.length;
     const container = new THREE.Group();
 
-    // 1. 数据平滑插值
+    // 1. 数据平滑插值 - 使用周期延展实现均匀过渡
     const smoothData = [];
     for (let i = 0; i < NUM_POINTS; i++) {
-        const tt = i / NUM_POINTS;
-        const idxRaw = tt * n;
-        const i1 = Math.floor(idxRaw) % n;
-        const i2 = (i1 + 1) % n;
-        const f = idxRaw - Math.floor(idxRaw);
+        const tt = i / NUM_POINTS;  // 0 到 1 的进度
 
-        smoothData.push({
-            pol: isDefault ? 0 : cosineInterpolate(originalData[i1].polarity, originalData[i2].polarity, f),
-            sub: isDefault ? 0 : cosineInterpolate(originalData[i1].subjectivity, originalData[i2].subjectivity, f)
-        });
+        if (isDefault) {
+            smoothData.push({ pol: 0, sub: 0 });
+        } else {
+            // 将进度映射到 [-0.5, n-0.5] 范围，实现周期性延展
+            const expandedT = (tt - 0.5) * n;
+            const idxRaw = expandedT + n;
+
+            // 使用 floor 获取两个相邻的诗句索引
+            const i1 = Math.floor(idxRaw) % n;
+            const i2 = (i1 + 1) % n;
+            const f = idxRaw - Math.floor(idxRaw);  // 插值因子 [0, 1]
+
+            // 使用余弦插值在两个诗句之间平滑过渡
+            smoothData.push({
+                pol: cosineInterpolate(originalData[i1].polarity, originalData[i2].polarity, f),
+                sub: cosineInterpolate(originalData[i1].subjectivity, originalData[i2].subjectivity, f)
+            });
+        }
     }
 
     // 2. 拓扑装配
@@ -125,8 +135,8 @@ function buildPoemLoop(originalData, isDefault = false) {
         const theta = (i / NUM_POINTS) * Math.PI * 2;
 
         // 限制宽高范围，防止挤占圆心
-        const w = isDefault ? 3.0 : remapNonlinear(data.pol, 2.5, 5.0, 1.2);
-        const h = isDefault ? 3.0 : remapNonlinear(data.pol, 2.8, 6.0, 1.2);
+        const w = isDefault ? 4.0 : remapNonlinear(data.pol, 3.0, 5.5, 1.2);
+        const h = isDefault ? 6.0 : remapNonlinear(data.pol, 4.0, 8.0, 1.2);
 
         const frame = createToriiFrame(w, h, CONFIG.frameThickness, CONFIG.framePoleThickness);
 
@@ -221,24 +231,27 @@ export function animate() {
         const time = clock.getElapsedTime();
 
         if (poemLoopGroup && !isPaused) {
-            poemLoopGroup.children.forEach((frame, i) => {
-                const { polarity, subjectivity, isDefault } = frame.userData;
-                
-                if (isDefault) {
-                    // 初始状态：轻微整齐的呼吸
-                    frame.rotation.z = Math.sin(time * 0.5 - i * 0.05) * 0.1;
-                } else {
-                    // 情感驱动逻辑：绝对角度映射
-                    // 1. 基础扭转：极性决定方向 (Polarity -> Twist)
-                    const baseTwist = polarity * Math.PI * 0.8; 
-                    
-                    // 2. 动态波动：主观性决定振幅 (Subjectivity -> Wave Amplitude)
-                    // time * 1.2 决定速度，i * 0.15 决定相位差（产生连贯波动感）
-                    const wave = Math.sin(time * 1.2 - i * 0.15) * (subjectivity * 0.6 + 0.1);
-                    
-                    // 应用最终旋转（不再是累加，而是直接赋值确保有序）
-                    frame.rotation.z = baseTwist + wave;
-                }
+            poemLoopGroup.children.forEach((frame) => {
+                const { polarity, index } = frame.userData;
+                const NUM_POINTS = CONFIG.numPoints;
+
+                // --- 核心修复逻辑 ---
+
+                // 1. 基础旋转：所有框共享一个基础角速度，保证整体节奏一致
+                const baseRotation = time * 0.3;
+
+                // 2. 情绪扭转：根据情绪（polarity）决定该处的"扭曲程度"
+                // 这样情绪强的地方会产生更大的角度偏移，但不会破坏连续性
+                const emotionalTwist = polarity * 1.5;
+
+                // 3. 波动传递：让旋转像波浪一样沿圆环传递（可选，增强流动感）
+                // index / NUM_POINTS 是框在环上的标准化位置 (0-1)
+                const wave = Math.sin(time * 1 + (index / NUM_POINTS) * Math.PI * 4) * 0.15;
+
+                // 最终合成：基础旋转 + 情绪静态扭转 + 动态波
+                frame.rotation.z = baseRotation + emotionalTwist + wave;
+
+                // ------------------
             });
         }
 
